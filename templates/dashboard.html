@@ -1,0 +1,148 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="stat-grid" id="stat-cards">
+    <div class="stat-card">
+        <div class="stat-title">系统状态</div>
+        <div class="stat-value" style="color:var(--success);"><i class="fas fa-check-circle"></i> <span id="sys-status">-</span></div>
+        <div class="stat-unit" id="sys-uptime">-</div>
+        <div class="stat-trend up"><i class="fas fa-arrow-up"></i> 状态良好</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">锅炉负荷</div>
+        <div class="stat-value" id="st-load">-</div>
+        <div class="stat-unit">%</div>
+        <div class="stat-trend" id="st-load-trend"><i class="fas fa-minus"></i> -</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">输灰效率</div>
+        <div class="stat-value" id="st-eff" style="color:var(--primary);">-</div>
+        <div class="stat-unit">%</div>
+        <div class="stat-trend up"><i class="fas fa-arrow-up"></i> <span id="st-eff-desc">-</span></div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">粉尘排放</div>
+        <div class="stat-value" id="st-dust" style="color:var(--success);">-</div>
+        <div class="stat-unit">mg/Nm³</div>
+        <div class="stat-trend down"><i class="fas fa-arrow-down"></i> 达标排放</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">系统能耗</div>
+        <div class="stat-value" id="st-energy">-</div>
+        <div class="stat-unit">kWh</div>
+        <div class="stat-trend"><i class="fas fa-minus"></i> 实时</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">灰库液位</div>
+        <div class="stat-value" id="st-ashbin" style="color:var(--info);">-</div>
+        <div class="stat-unit">%</div>
+        <div class="stat-trend"><i class="fas fa-minus"></i> 正常</div>
+    </div>
+</div>
+
+<div class="chart-box">
+    <div class="ics-card-header" style="border:none;padding:0 0 16px 0;">
+        <i class="fas fa-chart-line"></i> 关键参数趋势 (过去30分钟)
+    </div>
+    <canvas id="overviewChart"></canvas>
+</div>
+
+<div class="chart-box">
+    <div class="ics-card-header" style="border:none;padding:0 0 16px 0;">
+        <i class="fas fa-exclamation-triangle"></i> 最新告警
+    </div>
+    <ul class="alert-list" id="alert-list">
+        <div class="loading"><i class="fas fa-spinner fa-pulse"></i> 加载中...</div>
+    </ul>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+const chartColors = { primary: '#1890ff', success: '#52c41a', warning: '#faad14', danger: '#ff4d4f' };
+let overviewChart;
+
+function initChart(times, loadVals, effVals) {
+    const ctx = document.getElementById('overviewChart').getContext('2d');
+    if (overviewChart) overviewChart.destroy();
+    overviewChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: times,
+            datasets: [{
+                label: '锅炉负荷 (%)',
+                data: loadVals,
+                borderColor: chartColors.warning,
+                backgroundColor: 'rgba(250,173,20,0.1)',
+                fill: true, tension: 0.3, borderWidth: 2,
+                yAxisID: 'y',
+            }, {
+                label: '输灰效率 (%)',
+                data: effVals,
+                borderColor: chartColors.primary,
+                backgroundColor: 'rgba(24,144,255,0.1)',
+                fill: true, tension: 0.3, borderWidth: 2,
+                yAxisID: 'y',
+            }],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            interaction: { mode: 'index', intersect: false },
+            plugins: { legend: { position: 'top' } },
+            scales: {
+                y: { beginAtZero: true, max: 100, grid: { color: 'rgba(0,0,0,0.05)' } },
+                x: { grid: { display: false }, ticks: { maxTicksLimit: 15 } },
+            },
+        },
+    });
+}
+
+function loadOverview() {
+    api('/api/overview').then(function (d) {
+        document.getElementById('sys-status').textContent = d.status || '-';
+        document.getElementById('st-load').textContent = d.boiler_load || 0;
+        document.getElementById('st-eff').textContent = d.efficiency || 0;
+        document.getElementById('st-dust').textContent = d.dust_concentration || 0;
+        document.getElementById('st-energy').textContent = d.energy || 0;
+        document.getElementById('st-ashbin').textContent = d.ashbin_level || 0;
+        document.getElementById('alert-count').textContent = d.alert_count || 0;
+        var effEl = document.getElementById('st-eff-desc');
+        if(d.avg_efficiency >= 85) effEl.textContent = '优秀';
+        else if(d.avg_efficiency >= 75) effEl.textContent = '良好';
+        else if(d.avg_efficiency >= 65) effEl.textContent = '一般';
+        else effEl.textContent = '偏低';
+
+        var trend = document.getElementById('st-load-trend');
+        if(d.boiler_load > d.avg_load) { trend.className = 'stat-trend up'; trend.innerHTML = '<i class=\"fas fa-arrow-up\"></i> 高于平均'; }
+        else { trend.className = 'stat-trend down'; trend.innerHTML = '<i class=\"fas fa-arrow-down\"></i> 低于平均'; }
+    }).catch(function () {});
+}
+
+function loadTrend() {
+    api('/api/trend/t_boiler_load?minutes=30').then(function (d) {
+        api('/api/trend/t_convey_efficiency?minutes=30').then(function (d2) {
+            initChart(d.times, d.values, d2.values);
+        }).catch(function () {});
+    }).catch(function () {});
+}
+
+function loadAlerts() {
+    api('/api/alerts?limit=8').then(function (rows) {
+        var html = '';
+        rows.forEach(function (r) {
+            var lv = r.level_name || 'INFO';
+            html += '<li class="alert-item">'
+                + '<span class="alert-level ' + lv + '">[' + lv + ']</span>'
+                + '<span class="alert-msg">' + r.message + '</span>'
+                + '<span class="alert-ts">' + r.ts + '</span>'
+                + '</li>';
+        });
+        document.getElementById('alert-list').innerHTML = html || '<li class="alert-item">暂无告警</li>';
+    }).catch(function () {});
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    loadOverview(); loadTrend(); loadAlerts();
+    setInterval(loadOverview, 5000);
+});
+</script>
+{% endblock %}

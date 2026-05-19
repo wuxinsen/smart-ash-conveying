@@ -1,0 +1,116 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="stat-grid" id="opt-stats">
+    <div class="stat-card">
+        <div class="stat-title">当前负荷</div>
+        <div class="stat-value" id="opt-load" style="color:var(--warning);">-</div>
+        <div class="stat-unit">%</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">输灰效率</div>
+        <div class="stat-value" id="opt-eff" style="color:var(--primary);">-</div>
+        <div class="stat-unit">%</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">能效评级</div>
+        <div class="stat-value" id="opt-rating" style="color:var(--success);">-</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">节能潜力</div>
+        <div class="stat-value" id="opt-saving" style="color:var(--info);">-</div>
+        <div class="stat-unit">% 优化空间</div>
+    </div>
+</div>
+
+<div class="ics-card">
+    <div class="ics-card-header"><i class="fas fa-chart-bar"></i> 负荷 & 效率趋势 (过去6小时)</div>
+    <div class="ics-card-body">
+        <canvas id="optChart" height="250"></canvas>
+    </div>
+</div>
+
+<div class="ics-card">
+    <div class="ics-card-header"><i class="fas fa-lightbulb"></i> 推荐优化方案</div>
+    <div class="ics-card-body" id="plans-container">
+        <div class="loading"><i class="fas fa-spinner fa-pulse"></i> 加载中...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let optChart;
+
+function initOptChart(times, loadVals, effVals) {
+    var ctx = document.getElementById('optChart').getContext('2d');
+    if (optChart) optChart.destroy();
+    optChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: times,
+            datasets: [{
+                label: '锅炉负荷 (%)',
+                data: loadVals,
+                borderColor: '#faad14', backgroundColor: 'rgba(250,173,20,0.1)',
+                fill: true, tension: 0.3, borderWidth: 2,
+            }, {
+                label: '输灰效率 (%)',
+                data: effVals,
+                borderColor: '#1890ff', backgroundColor: 'rgba(24,144,255,0.1)',
+                fill: true, tension: 0.3, borderWidth: 2,
+            }],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'top' } },
+            scales: { y: { beginAtZero: true, max: 100 }, x: { ticks: { maxTicksLimit: 12 } } },
+        },
+    });
+}
+
+function loadOptimization() {
+    api('/api/optimization').then(function (d) {
+        document.getElementById('opt-load').textContent = d.load || 0;
+        document.getElementById('opt-eff').textContent = d.efficiency || 0;
+
+        var rating = d.rating || '-';
+        var ratingEl = document.getElementById('opt-rating');
+        ratingEl.textContent = rating;
+        if (rating === '优秀' || rating === '良好') ratingEl.style.color = '#52c41a';
+        else if (rating === '一般') ratingEl.style.color = '#faad14';
+        else ratingEl.style.color = '#ff4d4f';
+
+        document.getElementById('opt-saving').textContent = d.energy_saving || 0;
+
+        // 方案
+        var html = '';
+        if (d.active_plans && d.active_plans.length > 0) {
+            d.active_plans.forEach(function (p) {
+                html += '<div class="plan-card">'
+                    + '<div class="plan-name"><i class="fas fa-check-circle" style="color:var(--success);"></i> ' + p.id + ' - ' + p.name + '</div>'
+                    + '<div class="plan-meta"><span>条件: ' + p.condition + '</span> | <span>预期: ' + p.expected_saving + '</span> | <span>风险: ' + p.risk + '</span></div>'
+                    + '<ol class="plan-actions">';
+                p.actions.forEach(function (a) { html += '<li>' + a + '</li>'; });
+                html += '</ol></div>';
+            });
+        } else {
+            html = '<div style="text-align:center;padding:24px;color:var(--text-light);"><i class="fas fa-check-circle" style="font-size:48px;color:var(--success);display:block;margin-bottom:12px;"></i>当前工况无匹配优化方案</div>';
+        }
+        document.getElementById('plans-container').innerHTML = html;
+    }).catch(function () {});
+}
+
+function loadTrend() {
+    api('/api/trend/t_boiler_load?minutes=360').then(function (d) {
+        api('/api/trend/t_convey_efficiency?minutes=360').then(function (d2) {
+            initOptChart(d.times, d.values, d2.values);
+        }).catch(function () {});
+    }).catch(function () {});
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    loadOptimization(); loadTrend();
+    setInterval(loadOptimization, 10000);
+});
+</script>
+{% endblock %}

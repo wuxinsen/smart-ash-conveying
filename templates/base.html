@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{ page_title }} - 智慧输灰系统</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+</head>
+<body>
+<div class="ics-layout">
+    <!-- 侧边栏 -->
+    <div class="ics-sider" id="sidebar">
+        <div class="ics-logo">
+            <i class="fas fa-fire" style="color:#fff;font-size:24px;"></i>
+            <span class="ics-logo-text">智慧输灰</span>
+        </div>
+        <ul class="ics-menu">
+            <li class="ics-menu-item {% if page_title == '系统概览' %}active{% endif %}" data-target="/">
+                <i class="fas fa-tachometer-alt"></i><span>系统概览</span>
+            </li>
+            <li class="ics-menu-item {% if page_title == '实时监测' %}active{% endif %}" data-target="/real_time">
+                <i class="fas fa-chart-line"></i><span>实时监测</span>
+            </li>
+            <li class="ics-menu-item {% if page_title == '优化分析' %}active{% endif %}" data-target="/optimization">
+                <i class="fas fa-bolt"></i><span>优化分析</span>
+            </li>
+            <li class="ics-menu-item {% if page_title == '历史数据' %}active{% endif %}" data-target="/history">
+                <i class="fas fa-history"></i><span>历史数据</span>
+            </li>
+            <li class="ics-menu-item {% if page_title == '故障诊断' %}active{% endif %}" data-target="/fault_diagnosis">
+                <i class="fas fa-exclamation-triangle"></i><span>故障诊断</span>
+            </li>
+            <li class="ics-menu-item collapse-btn" id="collapse-btn">
+                <i class="fas fa-arrow-left"></i><span>收起菜单</span>
+            </li>
+        </ul>
+    </div>
+
+    <!-- 头部 -->
+    <div class="ics-header" id="header">
+        <div class="ics-header-left">
+            <div class="ics-toggle-btn" id="toggle-btn"><i class="fas fa-bars"></i></div>
+            <div class="ics-page-title">
+                <i class="fas fa-industry"></i>
+                <span>{{ page_title }}</span>
+            </div>
+        </div>
+        <div class="ics-header-right">
+            <div class="ics-alarm-badge" id="alarm-badge" onclick="window.location.href='/fault_diagnosis'">
+                <i class="fas fa-bell"></i><span id="alert-count">0</span>
+            </div>
+            <div class="ics-time-display">
+                <i class="fas fa-clock"></i><span id="clock">{{ now.strftime('%Y-%m-%d %H:%M:%S') }}</span>
+            </div>
+            <div class="ics-user-info">
+                <div class="ics-user-avatar"><i class="fas fa-user"></i></div>
+                <span>管理员</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- 内容 -->
+    <div class="ics-content" id="content">
+        {% block content %}{% endblock %}
+    </div>
+</div>
+
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

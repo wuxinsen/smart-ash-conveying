@@ -1,0 +1,166 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="ics-card">
+    <div class="ics-card-header"><i class="fas fa-search"></i> 历史数据查询</div>
+    <div class="ics-card-body">
+        <div class="filter-bar" style="justify-content:flex-start;gap:12px;flex-wrap:wrap;">
+            <select id="tag-select" style="padding:8px 12px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font-size:14px;min-width:180px;">
+                <option value="">— 选择测点 —</option>
+            </select>
+            <div class="time-range" style="display:flex;gap:6px;">
+                <span class="filter-tag" data-hours="1">1 小时</span>
+                <span class="filter-tag active" data-hours="6">6 小时</span>
+                <span class="filter-tag" data-hours="24">24 小时</span>
+                <span class="filter-tag" data-hours="168">7 天</span>
+            </div>
+            <span class="filter-tag" id="refresh-btn" style="background:var(--primary);color:#fff;border-color:var(--primary);"><i class="fas fa-sync-alt"></i> 刷新</span>
+        </div>
+    </div>
+</div>
+
+<div class="stat-grid" id="hist-stats" style="display:none;">
+    <div class="stat-card">
+        <div class="stat-title">当前值</div>
+        <div class="stat-value" id="hs-current" style="color:var(--primary);">-</div>
+        <div class="stat-unit" id="hs-unit">-</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">平均值</div>
+        <div class="stat-value" id="hs-avg" style="color:var(--info);">-</div>
+        <div class="stat-unit">-</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">最大值</div>
+        <div class="stat-value" id="hs-max" style="color:var(--danger);">-</div>
+        <div class="stat-unit" id="hs-max-ts" style="font-size:12px;">-</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">最小值</div>
+        <div class="stat-value" id="hs-min" style="color:var(--success);">-</div>
+        <div class="stat-unit" id="hs-min-ts" style="font-size:12px;">-</div>
+    </div>
+</div>
+
+<div class="ics-card" id="chart-card" style="display:none;">
+    <div class="ics-card-header"><i class="fas fa-chart-line"></i> <span id="chart-title">趋势曲线</span></div>
+    <div class="ics-card-body">
+        <canvas id="historyChart" height="300"></canvas>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let historyChart;
+const POINT_META = [
+    {% for p in points %}
+    {tbl:"{{ p.tbl }}", name:"{{ p.name }}", unit:"{{ p.unit }}", cat:"{{ p.category }}"},
+    {% endfor %}
+];
+
+function initHistoryChart(times, vals, label, unit) {
+    var ctx = document.getElementById('historyChart').getContext('2d');
+    if (historyChart) historyChart.destroy();
+    historyChart = new Chart(ctx, {
+        type: 'line',
+        data: {
+            labels: times,
+            datasets: [{
+                label: label + ' (' + unit + ')',
+                data: vals,
+                borderColor: '#1890ff',
+                backgroundColor: 'rgba(24,144,255,0.1)',
+                fill: true, tension: 0.3, borderWidth: 2,
+                pointRadius: 1.5,
+            }],
+        },
+        options: {
+            responsive: true, maintainAspectRatio: false,
+            plugins: { legend: { position: 'top' } },
+            scales: {
+                y: { beginAtZero: true, grid: { color: 'rgba(0,0,0,0.05)' } },
+                x: { grid: { display: false }, ticks: { maxTicksLimit: 15 } },
+            },
+        },
+    });
+}
+
+function loadHistory(tbl, hours) {
+    api('/api/history/' + tbl + '?hours=' + hours).then(function (d) {
+        if (!d.times || d.times.length === 0) {
+            document.getElementById('chart-card').style.display = 'none';
+            document.getElementById('hist-stats').style.display = 'none';
+            return;
+        }
+        var meta = POINT_META.find(function (p) { return p.tbl === tbl; });
+        var label = meta ? meta.name : tbl;
+        var unit = meta ? meta.unit : '';
+        document.getElementById('chart-title').textContent = label + ' 趋势曲线';
+        document.getElementById('hs-unit').textContent = unit;
+        document.getElementById('chart-card').style.display = 'block';
+
+        initHistoryChart(d.times, d.values, label, unit);
+
+        // 统计
+        var vals = d.values;
+        var last = vals[vals.length - 1];
+        var sum = 0;
+        var min = Infinity, max = -Infinity;
+        var minTs = '', maxTs = '';
+        vals.forEach(function (v, i) {
+            sum += v;
+            if (v < min) { min = v; minTs = d.times[i]; }
+            if (v > max) { max = v; maxTs = d.times[i]; }
+        });
+        document.getElementById('hs-current').textContent = last.toFixed(2);
+        document.getElementById('hs-avg').textContent = (sum / vals.length).toFixed(2);
+        document.getElementById('hs-max').textContent = max.toFixed(2);
+        document.getElementById('hs-max-ts').textContent = maxTs;
+        document.getElementById('hs-min').textContent = min.toFixed(2);
+        document.getElementById('hs-min-ts').textContent = minTs;
+        document.getElementById('hist-stats').style.display = 'grid';
+    }).catch(function () {});
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    // 填充测点下拉
+    var sel = document.getElementById('tag-select');
+    var cats = {};
+    POINT_META.forEach(function (p) {
+        if (!cats[p.cat]) cats[p.cat] = [];
+        cats[p.cat].push(p);
+    });
+    Object.keys(cats).forEach(function (cat) {
+        var opt = document.createElement('optgroup');
+        opt.label = cat;
+        cats[cat].forEach(function (p) {
+            var o = document.createElement('option');
+            o.value = p.tbl;
+            o.textContent = p.name;
+            opt.appendChild(o);
+        });
+        sel.appendChild(opt);
+    });
+
+    var currentTbl = '', currentHours = 6;
+
+    sel.addEventListener('change', function () {
+        currentTbl = this.value;
+        if (currentTbl) loadHistory(currentTbl, currentHours);
+    });
+
+    document.querySelectorAll('.time-range .filter-tag').forEach(function (el) {
+        el.addEventListener('click', function () {
+            document.querySelectorAll('.time-range .filter-tag').forEach(function (e) { e.classList.remove('active'); });
+            this.classList.add('active');
+            currentHours = parseInt(this.getAttribute('data-hours'));
+            if (currentTbl) loadHistory(currentTbl, currentHours);
+        });
+    });
+
+    document.getElementById('refresh-btn').addEventListener('click', function () {
+        if (currentTbl) loadHistory(currentTbl, currentHours);
+    });
+});
+</script>
+{% endblock %}

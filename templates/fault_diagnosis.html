@@ -1,0 +1,132 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="stat-grid" id="diag-stats">
+    <div class="stat-card">
+        <div class="stat-title">锅炉负荷</div>
+        <div class="stat-value" id="dg-load" style="color:var(--warning);">-</div>
+        <div class="stat-unit">%</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">触发规则数</div>
+        <div class="stat-value" id="dg-rules" style="color:var(--danger);">-</div>
+        <div class="stat-unit">条告警规则</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">告警级别筛选</div>
+        <div class="stat-value" style="font-size:14px;line-height:1.6;">
+            <span class="filter-tag active" data-level="0" style="font-size:12px;padding:2px 10px;">全部</span>
+            <span class="filter-tag" data-level="4" style="font-size:12px;padding:2px 10px;">危险</span>
+            <span class="filter-tag" data-level="3" style="font-size:12px;padding:2px 10px;">严重</span>
+            <span class="filter-tag" data-level="2" style="font-size:12px;padding:2px 10px;">警告</span>
+        </div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">操作</div>
+        <div class="stat-value" style="font-size:14px;">
+            <span class="filter-tag" id="dg-refresh" style="background:var(--primary);color:#fff;border-color:var(--primary);"><i class="fas fa-sync-alt"></i> 刷新</span>
+        </div>
+    </div>
+</div>
+
+<div class="ics-card">
+    <div class="ics-card-header"><i class="fas fa-stethoscope"></i> 专家诊断结果</div>
+    <div class="ics-card-body" id="diagnosis-container">
+        <div class="loading"><i class="fas fa-spinner fa-pulse"></i> 加载中...</div>
+    </div>
+</div>
+
+<div class="ics-card">
+    <div class="ics-card-header"><i class="fas fa-exclamation-triangle"></i> 告警事件记录</div>
+    <div class="ics-card-body" id="alert-container">
+        <div class="loading"><i class="fas fa-spinner fa-pulse"></i> 加载中...</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var currentLevel = 0;
+
+function loadDiagnosis() {
+    api('/api/expert_diagnosis').then(function (d) {
+        document.getElementById('dg-load').textContent = d.load || 0;
+        var rules = d.rules_triggered || [];
+        document.getElementById('dg-rules').textContent = rules.length;
+
+        var html = '';
+        if (rules.length === 0) {
+            html = '<div style="text-align:center;padding:32px;">'
+                + '<i class="fas fa-check-circle" style="font-size:48px;color:var(--success);display:block;margin-bottom:12px;"></i>'
+                + '<div style="color:var(--text-light);font-size:16px;">当前所有参数正常，未触发诊断规则</div></div>';
+        } else {
+            rules.forEach(function (r) {
+                html += '<div class="plan-card" style="border-left:4px solid var(--danger);">'
+                    + '<div class="plan-name"><i class="fas fa-exclamation-circle" style="color:var(--danger);"></i> ' + r.name + '</div>'
+                    + '<div class="plan-meta"><strong>诊断结论：</strong>' + r.conclusion + '</div>'
+                    + '<div class="plan-meta" style="color:var(--success);"><strong>建议措施：</strong>' + r.suggestion + '</div>'
+                    + '</div>';
+            });
+        }
+        document.getElementById('diagnosis-container').innerHTML = html;
+    }).catch(function () {});
+}
+
+function loadAlerts(level) {
+    var url = '/api/alerts?limit=50';
+    if (level > 0) url += '&level=' + level;
+    api(url).then(function (rows) {
+        var html = '';
+        if (!rows || rows.length === 0) {
+            html = '<div style="text-align:center;padding:24px;color:var(--text-light);"><i class="fas fa-check-circle" style="font-size:36px;color:var(--success);display:block;margin-bottom:8px;"></i>暂无告警</div>';
+        } else {
+            html = '<div style="overflow-x:auto;"><table class="alert-table" style="width:100%;border-collapse:collapse;font-size:14px;">'
+                + '<thead><tr style="border-bottom:2px solid var(--border);">'
+                + '<th style="padding:10px 8px;text-align:left;">时间</th>'
+                + '<th style="padding:10px 8px;text-align:left;">级别</th>'
+                + '<th style="padding:10px 8px;text-align:left;">来源</th>'
+                + '<th style="padding:10px 8px;text-align:left;">消息</th>'
+                + '<th style="padding:10px 8px;text-align:left;">建议措施</th>'
+                + '</tr></thead><tbody>';
+            rows.forEach(function (r) {
+                var lvClass = '';
+                if (r.level >= 4) lvClass = 'alert-level FATAL';
+                else if (r.level >= 3) lvClass = 'alert-level CRITICAL';
+                else if (r.level >= 2) lvClass = 'alert-level WARNING';
+                else lvClass = 'alert-level INFO';
+                html += '<tr style="border-bottom:1px solid var(--border);">'
+                    + '<td style="padding:8px;white-space:nowrap;">' + r.ts + '</td>'
+                    + '<td style="padding:8px;"><span class="' + lvClass + '">[' + r.level_name + ']</span></td>'
+                    + '<td style="padding:8px;">' + (r.source_tag || '-') + '</td>'
+                    + '<td style="padding:8px;">' + r.message + '</td>'
+                    + '<td style="padding:8px;color:var(--success);">' + (r.action || '-') + '</td>'
+                    + '</tr>';
+            });
+            html += '</tbody></table></div>';
+        }
+        document.getElementById('alert-container').innerHTML = html;
+    }).catch(function () {});
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    loadDiagnosis();
+    loadAlerts(0);
+
+    // 告警级别筛选
+    document.querySelectorAll('[data-level]').forEach(function (el) {
+        el.addEventListener('click', function () {
+            document.querySelectorAll('[data-level]').forEach(function (e) { e.classList.remove('active'); });
+            this.classList.add('active');
+            currentLevel = parseInt(this.getAttribute('data-level'));
+            loadAlerts(currentLevel);
+        });
+    });
+
+    document.getElementById('dg-refresh').addEventListener('click', function () {
+        loadDiagnosis();
+        loadAlerts(currentLevel);
+    });
+
+    setInterval(loadDiagnosis, 15000);
+});
+</script>
+{% endblock %}

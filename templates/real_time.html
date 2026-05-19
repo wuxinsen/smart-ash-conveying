@@ -1,0 +1,110 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="stat-grid" id="status-bar">
+    <div class="stat-card">
+        <div class="stat-title">设备状态</div>
+        <div class="stat-value" id="rt-status" style="color:var(--success);">-</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">锅炉负荷</div>
+        <div class="stat-value" id="rt-load">-</div>
+        <div class="stat-unit">%</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">输灰效率</div>
+        <div class="stat-value" id="rt-eff">-</div>
+        <div class="stat-unit">%</div>
+    </div>
+    <div class="stat-card">
+        <div class="stat-title">输送气压</div>
+        <div class="stat-value" id="rt-pressure">-</div>
+        <div class="stat-unit">MPa</div>
+    </div>
+</div>
+
+<div class="filter-bar" id="cat-filter">
+    <span class="filter-tag active" data-cat="all">全部</span>
+</div>
+
+<div id="monitor-container"></div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+var allPoints = [];
+
+function loadPoints() {
+    api('/api/points').then(function (pts) {
+        allPoints = pts;
+        renderCategories(pts, 'all');
+        buildFilters(pts);
+    }).catch(function () {});
+}
+
+function buildFilters(pts) {
+    var cats = {};
+    pts.forEach(function (p) { cats[p.category] = true; });
+    var html = '<span class="filter-tag active" data-cat="all">全部</span>';
+    Object.keys(cats).forEach(function (c) {
+        html += '<span class="filter-tag" data-cat="' + c + '">' + c + '</span>';
+    });
+    document.getElementById('cat-filter').innerHTML = html;
+    document.querySelectorAll('#cat-filter .filter-tag').forEach(function (el) {
+        el.addEventListener('click', function () {
+            document.querySelectorAll('#cat-filter .filter-tag').forEach(function (e) { e.classList.remove('active'); });
+            this.classList.add('active');
+            renderCategories(allPoints, this.getAttribute('data-cat'));
+        });
+    });
+}
+
+function renderCategories(pts, filter) {
+    var cats = {};
+    pts.forEach(function (p) {
+        if (filter !== 'all' && p.category !== filter) return;
+        if (!cats[p.category]) cats[p.category] = [];
+        cats[p.category].push(p);
+    });
+    var html = '';
+    Object.keys(cats).forEach(function (cat) {
+        html += '<div class="category-section">'
+            + '<div class="section-title"><i class="fas fa-cube"></i> ' + cat + '</div>'
+            + '<div class="monitor-grid">';
+        cats[cat].forEach(function (p) {
+            var color = '#1890ff';
+            if (p.name.indexOf('效率') >= 0) color = '#52c41a';
+            if (p.name.indexOf('温度') >= 0 || p.name.indexOf('压') >= 0) color = '#faad14';
+            if (p.name.indexOf('粉尘') >= 0) color = '#13c2c2';
+            html += '<div class="monitor-card">'
+                + '<div class="monitor-header"><i class="fas ' + (p.icon || 'fa-chart-simple') + '" style="color:' + color + ';"></i>'
+                + '<h3>' + p.name + '</h3></div>'
+                + '<div class="monitor-body">'
+                + '<div class="monitor-val" style="color:' + color + ';">' + p.val.toFixed(2) + '</div>'
+                + '<div class="monitor-unit">' + p.unit + '</div>'
+                + '<div class="monitor-ts">' + p.ts + '</div>'
+                + '</div></div>';
+        });
+        html += '</div></div>';
+    });
+    document.getElementById('monitor-container').innerHTML = html;
+}
+
+function loadStatus() {
+    api('/api/equipment_status').then(function (d) {
+        var stEl = document.getElementById('rt-status');
+        if (d.overall === 'normal') { stEl.innerHTML = '<i class="fas fa-check-circle"></i> 运行中'; stEl.style.color = '#52c41a'; }
+        else if (d.overall === 'fault') { stEl.innerHTML = '<i class="fas fa-times-circle"></i> 故障'; stEl.style.color = '#ff4d4f'; }
+        else { stEl.innerHTML = '<i class="fas fa-stop-circle"></i> 停止'; stEl.style.color = '#faad14'; }
+        document.getElementById('rt-load').textContent = d.boiler_load || 0;
+        document.getElementById('rt-eff').textContent = d.efficiency || 0;
+        document.getElementById('rt-pressure').textContent = d.convey_pressure || 0;
+    }).catch(function () {});
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+    loadPoints(); loadStatus();
+    setInterval(loadStatus, 5000);
+    setInterval(loadPoints, 10000);
+});
+</script>
+{% endblock %}
