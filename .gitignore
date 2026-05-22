@@ -25,3 +25,6 @@ Thumbs.db
 
 # TDengine
 *.db
+
+# Local config overrides (per-machine settings, never commit)
+settings_local.py

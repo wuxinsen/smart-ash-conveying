@@ -5,11 +5,13 @@
 风格: ICS 工业控制平台 UI
 """
 
-import taos
 from datetime import datetime, timedelta
-from typing import Any
 
 from flask import Flask, render_template, jsonify, request
+
+import database as db
+from config import POINTS as POINTS_CFG
+from settings import WEB_DEBUG, WEB_HOST, WEB_PORT, TD_HOST, TD_PORT, TD_DB
 
 # ---------------------------------------------------------------------------
 # Flask 应用
@@ -19,62 +21,11 @@ app = Flask(
     template_folder="templates",
     static_folder="static",
 )
-app.config.update(SECRET_KEY="ash_web_2026", DEBUG=False)
+app.config.update(SECRET_KEY="ash_web_2026", DEBUG=WEB_DEBUG)
 
 # ---------------------------------------------------------------------------
-# TDengine 工具
+# 测点元信息
 # ---------------------------------------------------------------------------
-TD_HOST = "localhost"
-TD_PORT = 6030
-TD_USER = "root"
-TD_PASS = "taosdata"
-TD_DB = "ash_system"
-
-
-def td_conn():
-    """创建 TDengine 连接。"""
-    c = taos.connect(host=TD_HOST, port=TD_PORT, user=TD_USER, password=TD_PASS)
-    cur = c.cursor()
-    cur.execute(f"USE {TD_DB};")
-    return c, cur
-
-
-def query_one(cur, sql: str) -> Any | None:
-    """查询单行单列。"""
-    try:
-        cur.execute(sql)
-        r = cur.fetchone()
-        return r[0] if r else None
-    except Exception:
-        return None
-
-
-def query_all(cur, sql: str) -> list:
-    """查询多行。"""
-    try:
-        cur.execute(sql)
-        return cur.fetchall()
-    except Exception:
-        return []
-
-
-def fetch_latest(tbl: str) -> dict | None:
-    """获取指定子表的最新数据。"""
-    try:
-        c, cur = td_conn()
-        cur.execute(
-            f"SELECT ts, val, unit FROM {tbl} ORDER BY ts DESC LIMIT 1;"
-        )
-        r = cur.fetchone()
-        cur.close(); c.close()
-        if r:
-            return {"ts": str(r[0])[:19], "val": float(r[1]), "unit": str(r[2])}
-    except Exception:
-        pass
-    return None
-
-
-# 测点元信息（用于前端展示）
 POINT_META: list[tuple[str, str, str, str, str]] = [
     # (表名, 中文名, 分类, 图标, 单位)
     ("t_boiler_load",        "锅炉负荷",    "锅炉侧",    "fa-fire",           "%"),
@@ -135,22 +86,17 @@ def fault_diagnosis():
 def api_overview():
     """系统概览关键指标。"""
     try:
-        c, cur = td_conn()
-        load = query_one(cur, "SELECT val FROM t_boiler_load ORDER BY ts DESC LIMIT 1;") or 50
-        eff = query_one(cur, "SELECT val FROM t_convey_efficiency ORDER BY ts DESC LIMIT 1;") or 0
-        dust = query_one(cur, "SELECT val FROM t_dust_concentration ORDER BY ts DESC LIMIT 1;") or 0
-        energy = query_one(cur, "SELECT val FROM t_energy_consumption ORDER BY ts DESC LIMIT 1;") or 0
-        echo2 = query_one(cur, "SELECT val FROM t_ashbin_level ORDER BY ts DESC LIMIT 1;") or 0
+        latest = db.fetch_all_latest()
+        load = latest.get("t_boiler_load", 50)
+        eff = latest.get("t_convey_efficiency", 0)
+        dust = latest.get("t_dust_concentration", 0)
+        energy = latest.get("t_energy_consumption", 0)
+        ashbin = latest.get("t_ashbin_level", 0)
 
-        # 过去1小时平均
         h1 = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-        avg_eff = query_one(cur, f"SELECT AVG(val) FROM t_convey_efficiency WHERE ts >= '{h1}';") or 0
-        avg_load = query_one(cur, f"SELECT AVG(val) FROM t_boiler_load WHERE ts >= '{h1}';") or 0
-
-        # 告警数
-        alert_cnt = query_one(cur, "SELECT COUNT(*) FROM ae_unit3 WHERE alert_level >= 3;") or 0
-
-        cur.close(); c.close()
+        avg_eff = db.query_one(f"SELECT AVG(val) FROM t_convey_efficiency WHERE ts >= '{h1}';") or 0
+        avg_load = db.query_one(f"SELECT AVG(val) FROM t_boiler_load WHERE ts >= '{h1}';") or 0
+        alert_cnt = db.query_one("SELECT COUNT(*) FROM ae_unit3 WHERE alert_level >= 3;") or 0
 
         return jsonify({
             "boiler_load": round(load, 1),
@@ -158,7 +104,7 @@ def api_overview():
             "avg_efficiency": round(avg_eff, 1),
             "dust_concentration": round(dust, 2),
             "energy": round(energy, 1),
-            "ashbin_level": round(echo2, 1),
+            "ashbin_level": round(ashbin, 1),
             "avg_load": round(avg_load, 1),
             "alert_count": int(alert_cnt),
             "status": "运行中",
@@ -173,7 +119,7 @@ def api_all_points():
     """获取所有测点最新值。"""
     results = []
     for tbl, name, cat, icon, unit in POINT_META:
-        d = fetch_latest(tbl)
+        d = db.fetch_latest(tbl)
         if d:
             results.append({
                 "tbl": tbl, "name": name, "category": cat, "icon": icon,
@@ -185,14 +131,8 @@ def api_all_points():
 @app.route("/api/trend/<tbl>")
 def api_trend(tbl: str):
     """获取指定测点的近期趋势数据。"""
-    minutes = request.args.get("minutes", 30, type=int)
-    since = (datetime.now() - timedelta(minutes=minutes)).strftime("%Y-%m-%d %H:%M:%S")
     try:
-        c, cur = td_conn()
-        rows = query_all(cur, f"SELECT ts, val FROM {tbl} WHERE ts >= '{since}' ORDER BY ts ASC;")
-        cur.close(); c.close()
-        times = [str(r[0])[11:19] for r in rows]
-        vals = [float(r[1]) for r in rows]
+        times, vals = db.fetch_trend(tbl, request.args.get("minutes", 30, type=int))
         return jsonify({"times": times, "values": vals})
     except Exception as e:
         return jsonify({"error": str(e), "times": [], "values": []}), 500
@@ -206,16 +146,13 @@ def api_trend(tbl: str):
 def api_equipment_status():
     """设备状态 (从最新数据推算)。"""
     try:
-        c, cur = td_conn()
-        status = query_one(cur, "SELECT val FROM t_equipment_status ORDER BY ts DESC LIMIT 1;") or 1
-        load = query_one(cur, "SELECT val FROM t_boiler_load ORDER BY ts DESC LIMIT 1;") or 50
-        eff = query_one(cur, "SELECT val FROM t_convey_efficiency ORDER BY ts DESC LIMIT 1;") or 0
-        convey_p = query_one(cur, "SELECT val FROM t_convey_pressure ORDER BY ts DESC LIMIT 1;") or 0
-        cur.close(); c.close()
-
-        s = int(status)
+        latest = db.fetch_all_latest()
+        status = int(latest.get("t_equipment_status", 1))
+        load = latest.get("t_boiler_load", 50)
+        eff = latest.get("t_convey_efficiency", 0)
+        convey_p = latest.get("t_convey_pressure", 0)
         return jsonify({
-            "overall": "normal" if s == 1 else ("fault" if s == 2 else "stopped"),
+            "overall": "normal" if status == 1 else ("fault" if status == 2 else "stopped"),
             "boiler_load": round(load, 1),
             "efficiency": round(eff, 1),
             "convey_pressure": round(convey_p, 3),
@@ -227,7 +164,7 @@ def api_equipment_status():
 @app.route("/api/latest/<tbl>")
 def api_latest(tbl: str):
     """获取单个测点最新值。"""
-    d = fetch_latest(tbl)
+    d = db.fetch_latest(tbl)
     if d:
         return jsonify(d)
     return jsonify({"error": "no data"}), 404
@@ -281,16 +218,15 @@ EXPERT_RULES = [
 def api_optimization():
     """优化分析数据。"""
     try:
-        c, cur = td_conn()
-        load = query_one(cur, "SELECT val FROM t_boiler_load ORDER BY ts DESC LIMIT 1;") or 50
-        eff = query_one(cur, "SELECT val FROM t_convey_efficiency ORDER BY ts DESC LIMIT 1;") or 0
-        energy = query_one(cur, "SELECT val FROM t_energy_consumption ORDER BY ts DESC LIMIT 1;") or 0
+        latest = db.fetch_all_latest()
+        load = latest.get("t_boiler_load", 50)
+        eff = latest.get("t_convey_efficiency", 0)
+        energy = latest.get("t_energy_consumption", 0)
 
         h1 = (datetime.now() - timedelta(hours=1)).strftime("%Y-%m-%d %H:%M:%S")
-        avg_load = query_one(cur, f"SELECT AVG(val) FROM t_boiler_load WHERE ts >= '{h1}';") or 50
-        avg_eff = query_one(cur, f"SELECT AVG(val) FROM t_convey_efficiency WHERE ts >= '{h1}';") or 0
-        avg_energy = query_one(cur, f"SELECT AVG(val) FROM t_energy_consumption WHERE ts >= '{h1}';") or 0
-        cur.close(); c.close()
+        avg_load = db.query_one(f"SELECT AVG(val) FROM t_boiler_load WHERE ts >= '{h1}';") or 50
+        avg_eff = db.query_one(f"SELECT AVG(val) FROM t_convey_efficiency WHERE ts >= '{h1}';") or 0
+        avg_energy = db.query_one(f"SELECT AVG(val) FROM t_energy_consumption WHERE ts >= '{h1}';") or 0
     except Exception:
         load = eff = avg_load = avg_eff = avg_energy = 50
 
@@ -300,7 +236,6 @@ def api_optimization():
               or ("< 75" in p["condition"] and "50" in p["condition"] and 50 <= load < 75)
               or ("≥ 75" in p["condition"] and load >= 75)]
 
-    # 效率评价
     if avg_eff >= 85: rating = "优秀"
     elif avg_eff >= 75: rating = "良好"
     elif avg_eff >= 65: rating = "一般"
@@ -309,35 +244,20 @@ def api_optimization():
     energy_saving = round((1 - eff / max(avg_eff, 1)) * 100, 1) if avg_eff > 0 else 0
 
     return jsonify({
-        "load": round(load, 1),
-        "efficiency": round(eff, 1),
-        "avg_load": round(avg_load, 1),
-        "avg_efficiency": round(avg_eff, 1),
+        "load": round(load, 1), "efficiency": round(eff, 1),
+        "avg_load": round(avg_load, 1), "avg_efficiency": round(avg_eff, 1),
         "avg_energy": round(avg_energy, 1),
         "energy_saving": max(0, energy_saving),
-        "rating": rating,
-        "active_plans": active,
+        "rating": rating, "active_plans": active,
     })
 
 
 @app.route("/api/expert_diagnosis")
 def api_expert_diagnosis():
-    """专家诊断 - 从数据库读最新值匹配规则。"""
+    """专家诊断。"""
     try:
-        c, cur = td_conn()
-        latest = {}
-        for tbl in [
-            "t_boiler_load", "t_convey_pressure",
-            "t_convey_pipe_density", "t_air_compressor_current",
-            "t_dust_concentration", "t_convey_efficiency",
-            "t_ashbin_level", "t_exhaust_temp",
-            "t_equipment_status",
-        ]:
-            r = query_one(cur, f"SELECT val FROM {tbl} ORDER BY ts DESC LIMIT 1;")
-            if r is not None:
-                latest[tbl] = float(r)
+        latest = db.fetch_all_latest()
         load = latest.get("t_boiler_load", 50)
-        cur.close(); c.close()
     except Exception:
         latest = {}
         load = 50
@@ -352,10 +272,7 @@ def api_expert_diagnosis():
     if latest.get("t_convey_efficiency", 100) < 70:
         triggered.append(EXPERT_RULES[3])
 
-    return jsonify({
-        "load": round(load, 1),
-        "rules_triggered": triggered,
-    })
+    return jsonify({"load": round(load, 1), "rules_triggered": triggered})
 
 
 @app.route("/api/history/<tbl>")
@@ -364,9 +281,7 @@ def api_history(tbl: str):
     hours = request.args.get("hours", 24, type=int)
     since = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%d %H:%M:%S")
     try:
-        c, cur = td_conn()
-        rows = query_all(cur, f"SELECT ts, val FROM {tbl} WHERE ts >= '{since}' ORDER BY ts ASC;")
-        cur.close(); c.close()
+        rows = db.query_all(f"SELECT ts, val FROM {tbl} WHERE ts >= '{since}' ORDER BY ts ASC;")
         return jsonify({
             "times": [str(r[0])[:19] for r in rows],
             "values": [float(r[1]) for r in rows],
@@ -381,18 +296,8 @@ def api_alerts():
     limit = request.args.get("limit", 30, type=int)
     level = request.args.get("level", 0, type=int)
     try:
-        c, cur = td_conn()
-        where = f"WHERE alert_level >= {level}" if level > 0 else ""
-        rows = query_all(cur,
-            f"SELECT ts, alert_level, alert_level_name, source_tag, "
-            f"  source_value, alert_message, suggested_action "
-            f"FROM ae_unit3 {where} ORDER BY ts DESC LIMIT {limit};")
-        cur.close(); c.close()
-        return jsonify([{
-            "ts": str(r[0])[:19], "level": int(r[1]), "level_name": str(r[2]),
-            "source_tag": str(r[3]), "source_value": float(r[4]) if r[4] else 0,
-            "message": str(r[5]), "action": str(r[6]) if r[6] else "",
-        } for r in rows])
+        alerts = db.fetch_alerts(limit, level)
+        return jsonify(alerts)
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -409,4 +314,4 @@ if __name__ == "__main__":
     print(f"  访问地址: http://localhost:5000")
     print(f"  Ctrl+C 停止服务")
     print("=" * 60)
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host=WEB_HOST, port=WEB_PORT, debug=WEB_DEBUG)
